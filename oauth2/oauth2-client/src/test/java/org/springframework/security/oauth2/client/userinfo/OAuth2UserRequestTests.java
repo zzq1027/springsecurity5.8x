@@ -1,0 +1,90 @@
+/*
+ * Copyright 2002-2020 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.springframework.security.oauth2.client.userinfo;
+
+import java.time.Instant;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
+import java.util.Map;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.ClientAuthenticationMethod;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
+
+/**
+ * Tests for {@link OAuth2UserRequest}.
+ *
+ * @author Joe Grandja
+ */
+public class OAuth2UserRequestTests {
+
+	private ClientRegistration clientRegistration;
+
+	private OAuth2AccessToken accessToken;
+
+	private Map<String, Object> additionalParameters;
+
+	@BeforeEach
+	public void setUp() {
+		// @formatter:off
+		this.clientRegistration = ClientRegistration.withRegistrationId("registration-1")
+				.clientId("client-1")
+				.clientSecret("secret")
+				.clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_BASIC)
+				.authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
+				.redirectUri("https://client.com")
+				.scope(new LinkedHashSet<>(Arrays.asList("scope1", "scope2")))
+				.authorizationUri("https://provider.com/oauth2/authorization")
+				.tokenUri("https://provider.com/oauth2/token")
+				.clientName("Client 1")
+				.build();
+		// @formatter:on
+		this.accessToken = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "access-token-1234", Instant.now(),
+				Instant.now().plusSeconds(60), new LinkedHashSet<>(Arrays.asList("scope1", "scope2")));
+		this.additionalParameters = new HashMap<>();
+		this.additionalParameters.put("param1", "value1");
+		this.additionalParameters.put("param2", "value2");
+	}
+
+	@Test
+	public void constructorWhenClientRegistrationIsNullThenThrowIllegalArgumentException() {
+		assertThatIllegalArgumentException().isThrownBy(() -> new OAuth2UserRequest(null, this.accessToken));
+	}
+
+	@Test
+	public void constructorWhenAccessTokenIsNullThenThrowIllegalArgumentException() {
+		assertThatIllegalArgumentException().isThrownBy(() -> new OAuth2UserRequest(this.clientRegistration, null));
+	}
+
+	@Test
+	public void constructorWhenAllParametersProvidedAndValidThenCreated() {
+		OAuth2UserRequest userRequest = new OAuth2UserRequest(this.clientRegistration, this.accessToken,
+				this.additionalParameters);
+		assertThat(userRequest.getClientRegistration()).isEqualTo(this.clientRegistration);
+		assertThat(userRequest.getAccessToken()).isEqualTo(this.accessToken);
+		assertThat(userRequest.getAdditionalParameters()).containsAllEntriesOf(this.additionalParameters);
+	}
+
+}

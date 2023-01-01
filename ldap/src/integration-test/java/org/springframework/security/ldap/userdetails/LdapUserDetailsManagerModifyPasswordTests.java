@@ -1,0 +1,107 @@
+/*
+ * Copyright 2002-2018 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.springframework.security.ldap.userdetails;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.ldap.core.ContextSource;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.ldap.DefaultLdapUsernameToDnMapper;
+import org.springframework.security.ldap.DefaultSpringSecurityContextSource;
+import org.springframework.security.ldap.SpringSecurityLdapTemplate;
+import org.springframework.security.ldap.server.UnboundIdContainer;
+import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.ContextConfiguration;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+
+/**
+ * Tests for {@link LdapUserDetailsManager#changePassword}, specifically relating to the
+ * use of the Modify Password Extended Operation.
+ *
+ * @author Josh Cummings
+ */
+@ExtendWith(SpringExtension.class)
+@ContextConfiguration(classes = LdapUserDetailsManagerModifyPasswordTests.UnboundIdContainerConfiguration.class)
+public class LdapUserDetailsManagerModifyPasswordTests {
+
+	LdapUserDetailsManager userDetailsManager;
+
+	@Autowired
+	ContextSource contextSource;
+
+	@BeforeEach
+	public void setup() {
+		this.userDetailsManager = new LdapUserDetailsManager(this.contextSource);
+		this.userDetailsManager.setUsePasswordModifyExtensionOperation(true);
+		this.userDetailsManager.setUsernameMapper(new DefaultLdapUsernameToDnMapper("ou=people", "uid"));
+	}
+
+	@Test
+	@WithMockUser(username = "bob", password = "bobspassword", authorities = "ROLE_USER")
+	public void changePasswordWhenOldPasswordIsIncorrectThenThrowsException() {
+		assertThatExceptionOfType(BadCredentialsException.class)
+				.isThrownBy(() -> this.userDetailsManager.changePassword("wrongoldpassword", "bobsnewpassword"));
+	}
+
+	@Test
+	@WithMockUser(username = "bob", password = "bobspassword", authorities = "ROLE_USER")
+	public void changePasswordWhenOldPasswordIsCorrectThenPasses() {
+		SpringSecurityLdapTemplate template = new SpringSecurityLdapTemplate(this.contextSource);
+
+		this.userDetailsManager.changePassword("bobspassword",
+				"bobsshinynewandformidablylongandnearlyimpossibletorememberthoughdemonstrablyhardtocrackduetoitshighlevelofentropypasswordofjustice");
+
+		assertThat(template.compare("uid=bob,ou=people", "userPassword",
+				"bobsshinynewandformidablylongandnearlyimpossibletorememberthoughdemonstrablyhardtocrackduetoitshighlevelofentropypasswordofjustice"))
+						.isTrue();
+	}
+
+	@Configuration
+	static class UnboundIdContainerConfiguration implements DisposableBean {
+
+		private UnboundIdContainer container = new UnboundIdContainer("dc=springframework,dc=org",
+				"classpath:test-server.ldif");
+
+		@Bean
+		UnboundIdContainer ldapContainer() {
+			this.container.setPort(0);
+			return this.container;
+		}
+
+		@Bean
+		ContextSource contextSource(UnboundIdContainer container) {
+			return new DefaultSpringSecurityContextSource(
+					"ldap://127.0.0.1:" + container.getPort() + "/dc=springframework,dc=org");
+		}
+
+		@Override
+		public void destroy() throws Exception {
+			this.container.stop();
+		}
+
+	}
+
+}

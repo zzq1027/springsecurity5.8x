@@ -1,0 +1,470 @@
+= Reactive Migrations
+
+If you have already performed the xref:migration/index.adoc[initial migration steps] for your Reactive application, you're now ready to perform steps specific to Reactive applications.
+
+== Exploit Protection Migrations
+
+The following steps relate to changes around how to configure CSRF.
+
+=== Configure `tokenFromMultipartDataEnabled`
+
+In Spring Security 5.8, the method `tokenFromMultipartDataEnabled` was deprecated in favor of `ServerCsrfTokenRequestAttributeHandler#setTokenFromMultipartDataEnabled`.
+
+To address the deprecation, the following code:
+
+.Configure `tokenFromMultipartDataEnabled` with DSL
+====
+.Java
+[source,java,role="primary"]
+----
+@Bean
+SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+	http
+		// ...
+		.csrf((csrf) -> csrf
+			.tokenFromMultipartDataEnabled(true)
+		);
+	return http.build();
+}
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@Bean
+open fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+	return http {
+		// ...
+		csrf {
+			tokenFromMultipartDataEnabled = true
+		}
+	}
+}
+----
+====
+
+can be replaced with:
+
+.Configure `tokenFromMultipartDataEnabled` with `ServerCsrfTokenRequestAttributeHandler`
+====
+.Java
+[source,java,role="primary"]
+----
+@Bean
+SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+	ServerCsrfTokenRequestAttributeHandler requestHandler = new ServerCsrfTokenRequestAttributeHandler();
+	requestHandler.setTokenFromMultipartDataEnabled(true);
+	http
+		// ...
+		.csrf((csrf) -> csrf
+			.csrfTokenRequestHandler(requestHandler)
+		);
+	return http.build();
+}
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@Bean
+open fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+	val requestHandler = ServerCsrfTokenRequestAttributeHandler()
+	requestHandler.tokenFromMultipartDataEnabled = true
+	return http {
+		// ...
+		csrf {
+			csrfTokenRequestHandler = requestHandler
+		}
+	}
+}
+----
+====
+
+=== Protect against CSRF BREACH
+
+You can opt into Spring Security 6's default support for BREACH protection of the `CsrfToken` using the following configuration:
+
+.`CsrfToken` BREACH Protection
+====
+.Java
+[source,java,role="primary"]
+----
+@Bean
+SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+	XorServerCsrfTokenRequestAttributeHandler requestHandler = new XorServerCsrfTokenRequestAttributeHandler();
+	// ...
+	http
+		// ...
+		.csrf((csrf) -> csrf
+			.csrfTokenRequestHandler(requestHandler)
+		);
+	return http.build();
+}
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@Bean
+open fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+	val requestHandler = XorServerCsrfTokenRequestAttributeHandler()
+	// ...
+	return http {
+		// ...
+		csrf {
+			csrfTokenRequestHandler = requestHandler
+		}
+	}
+}
+----
+====
+
+[[reactive-csrf-breach-opt-out]]
+=== Opt-out Steps
+
+If configuring CSRF BREACH protection gives you trouble, take a look at these scenarios for optimal opt out behavior:
+
+==== I am using AngularJS or another Javascript framework
+
+If you are using AngularJS and the https://angular.io/api/common/http/HttpClientXsrfModule[HttpClientXsrfModule] (or a similar module in another framework) along with `CookieServerCsrfTokenRepository.withHttpOnlyFalse()`, you may find that automatic support no longer works.
+
+In this case, you can configure Spring Security to validate the raw `CsrfToken` from the cookie while keeping CSRF BREACH protection of the response using a custom `ServerCsrfTokenRequestHandler` with delegation, like so:
+
+.Configure `CsrfToken` BREACH Protection to validate raw tokens
+====
+.Java
+[source,java,role="primary"]
+----
+@Bean
+SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+	CookieServerCsrfTokenRepository tokenRepository = CookieServerCsrfTokenRepository.withHttpOnlyFalse();
+	XorServerCsrfTokenRequestAttributeHandler delegate = new XorServerCsrfTokenRequestAttributeHandler();
+	// Use only the handle() method of XorServerCsrfTokenRequestAttributeHandler and the
+	// default implementation of resolveCsrfTokenValue() from ServerCsrfTokenRequestHandler
+	ServerCsrfTokenRequestHandler requestHandler = delegate::handle;
+	http
+		// ...
+		.csrf((csrf) -> csrf
+			.csrfTokenRepository(tokenRepository)
+			.csrfTokenRequestHandler(requestHandler)
+		);
+
+	return http.build();
+}
+
+@Bean
+WebFilter csrfCookieWebFilter() {
+	return (exchange, chain) -> {
+		Mono<CsrfToken> csrfToken = exchange.getAttributeOrDefault(CsrfToken.class.getName(), Mono.empty());
+		return csrfToken.doOnSuccess(token -> {
+			/* Ensures the token is subscribed to. */
+		}).then(chain.filter(exchange));
+	};
+}
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@Bean
+open fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+	val tokenRepository = CookieServerCsrfTokenRepository.withHttpOnlyFalse()
+	val delegate = XorServerCsrfTokenRequestAttributeHandler()
+	// Use only the handle() method of XorServerCsrfTokenRequestAttributeHandler and the
+	// default implementation of resolveCsrfTokenValue() from ServerCsrfTokenRequestHandler
+	val requestHandler = ServerCsrfTokenRequestHandler(delegate::handle)
+	return http.invoke {
+		// ...
+		csrf {
+			csrfTokenRepository = tokenRepository
+			csrfTokenRequestHandler = requestHandler
+		}
+	}
+}
+
+@Bean
+fun csrfCookieWebFilter(): WebFilter {
+	return WebFilter { exchange, chain ->
+		val csrfToken = exchange.getAttribute<Mono<CsrfToken>>(CsrfToken::class.java.name) ?: Mono.empty()
+		csrfToken.doOnSuccess {
+            /* Ensures the token is subscribed to. */
+		}.then(chain.filter(exchange))
+	}
+}
+----
+====
+
+==== I need to opt out of CSRF BREACH protection for another reason
+
+If CSRF BREACH protection does not work for you for another reason, you can opt out using the following configuration:
+
+.Opt out of `CsrfToken` BREACH protection
+====
+.Java
+[source,java,role="primary"]
+----
+@Bean
+SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {
+	ServerCsrfTokenRequestAttributeHandler requestHandler = new ServerCsrfTokenRequestAttributeHandler();
+	http
+		// ...
+		.csrf((csrf) -> csrf
+			.csrfTokenRequestHandler(requestHandler)
+		);
+	return http.build();
+}
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@Bean
+open fun securityWebFilterChain(http: ServerHttpSecurity): SecurityWebFilterChain {
+	val requestHandler = ServerCsrfTokenRequestAttributeHandler()
+	return http {
+		// ...
+		csrf {
+			csrfTokenRequestHandler = requestHandler
+		}
+	}
+}
+----
+====
+
+== Use `AuthorizationManager` for Method Security
+
+xref:reactive/authorization/method.adoc[Method Security] has been xref:reactive/authorization/method.adoc#jc-enable-reactive-method-security-authorization-manager[improved] through {security-api-url}org/springframework/security/authorization/AuthorizationManager.html[the `AuthorizationManager` API] and direct use of Spring AOP.
+
+Should you run into trouble with making these changes, you can follow the
+<<reactive-authorizationmanager-methods-opt-out,opt out steps>> at the end of this section.
+
+In Spring Security 5.8, `useAuthorizationManager` was added to {security-api-url}org/springframework/security/config/annotation/method/configuration/EnableReactiveMethodSecurity.html[`@EnableReactiveMethodSecurity`] to allow applications to opt in to ``AuthorizationManager``'s features.
+
+[[reactive-change-to-useauthorizationmanager]]
+=== Change `useAuthorizationManager` to `true`
+
+To opt in, change `useAuthorizationManager` to `true` like so:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@EnableReactiveMethodSecurity
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@EnableReactiveMethodSecurity
+----
+====
+
+changes to:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@EnableReactiveMethodSecurity(useAuthorizationManager = true)
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@EnableReactiveMethodSecurity(useAuthorizationManager = true)
+----
+====
+
+[[reactive-check-for-annotationconfigurationexceptions]]
+=== Check for ``AnnotationConfigurationException``s
+
+`useAuthorizationManager` activates stricter enforcement of Spring Security's non-repeatable or otherwise incompatible annotations.
+If after turning on `useAuthorizationManager` you see ``AnnotationConfigurationException``s in your logs, follow the instructions in the exception message to clean up your application's method security annotation usage.
+
+[[reactive-authorizationmanager-methods-opt-out]]
+=== Opt-out Steps
+
+If you ran into trouble with `AuthorizationManager` for reactive method security, you can opt out by changing:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@EnableReactiveMethodSecurity
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@EnableReactiveMethodSecurity
+----
+====
+
+to:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@EnableReactiveMethodSecurity(useAuthorizationManager = false)
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+@EnableReactiveMethodSecurity(useAuthorizationManager = false)
+----
+====
+
+== Propagate ``AuthenticationServiceException``s
+
+{security-api-url}org/springframework/security/web/server/Webauthentication/AuthenticationWebFilter.html[`AuthenticationFilter`] propagates {security-api-url}org/springframework/security/authentication/AuthenticationServiceException.html[``AuthenticationServiceException``]s to the {security-api-url}org/springframework/security/web/server/ServerAuthenticationEntryPoint.html[`ServerAuthenticationEntryPoint`].
+Because ``AuthenticationServiceException``s  represent a server-side error instead of a client-side error, in 6.0, this changes to propagate them to the container.
+
+=== Configure `ServerAuthenticationFailureHandler` to rethrow ``AuthenticationServiceException``s
+
+To prepare for the 6.0 default, `httpBasic` and `oauth2ResourceServer` should be configured to rethrow ``AuthenticationServiceException``s.
+
+For each, construct the appropriate authentication entry point for `httpBasic` and for `oauth2ResourceServer`:
+
+====
+.Java
+[source,java,role="primary"]
+----
+ServerAuthenticationEntryPoint bearerEntryPoint = new BearerTokenServerAuthenticationEntryPoint();
+ServerAuthenticationEntryPoint basicEntryPoint = new HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED);
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+val bearerEntryPoint: ServerAuthenticationEntryPoint = BearerTokenServerAuthenticationEntryPoint()
+val basicEntryPoint: ServerAuthenticationEntryPoint = HttpStatusServerEntryPoint(HttpStatus.UNAUTHORIZED)
+----
+====
+
+[NOTE]
+====
+If you use a custom `AuthenticationEntryPoint` for either or both mechanisms, use that one instead for the remaining steps.
+====
+
+Then, construct and configure a `ServerAuthenticationEntryPointFailureHandler` for each one:
+
+====
+.Java
+[source,java,role="primary"]
+----
+AuthenticationFailureHandler bearerFailureHandler = new ServerAuthenticationEntryPointFailureHandler(bearerEntryPoint);
+bearerFailureHandler.setRethrowAuthenticationServiceException(true);
+AuthenticationFailureHandler basicFailureHandler = new ServerAuthenticationEntryPointFailureHandler(basicEntryPoint);
+basicFailureHandler.setRethrowAuthenticationServiceException(true)
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+val bearerFailureHandler: AuthenticationFailureHandler = ServerAuthenticationEntryPointFailureHandler(bearerEntryPoint)
+bearerFailureHandler.setRethrowAuthenticationServiceException(true)
+val basicFailureHandler: AuthenticationFailureHandler = ServerAuthenticationEntryPointFailureHandler(basicEntryPoint)
+basicFailureHandler.setRethrowAuthenticationServiceException(true)
+----
+====
+
+Finally, wire each authentication failure handler into the DSL, like so:
+
+====
+.Java
+[source,java,role="primary"]
+----
+http
+    .httpBasic((basic) -> basic.authenticationFailureHandler(basicFailureHandler))
+    .oauth2ResourceServer((oauth2) -> oauth2.authenticationFailureHandler(bearerFailureHandler))
+----
+
+.Kotlin
+[source,kotlin,role="secondary"]
+----
+http {
+    httpBasic {
+        authenticationFailureHandler = basicFailureHandler
+    }
+    oauth2ResourceServer {
+        authenticationFailureHandler = bearerFailureHandler
+    }
+}
+----
+====
+
+[[reactive-authenticationfailurehandler-opt-out]]
+=== Opt-out Steps
+
+To opt-out of the 6.0 defaults and instead continue to pass `AuthenticationServiceException` on to ``ServerAuthenticationEntryPoint``s, you can follow the same steps as above, except set `rethrowAuthenticationServiceException` to false.
+
+== Address OAuth2 Client Deprecations
+
+=== `ServerOAuth2AuthorizedClientExchangeFilterFunction`
+
+The method `setAccessTokenExpiresSkew(...)` can be replaced with one of:
+
+* `ClientCredentialsReactiveOAuth2AuthorizedClientProvider#setClockSkew(...)`
+* `RefreshTokenReactiveOAuth2AuthorizedClientProvider#setClockSkew(...)`
+* `JwtBearerReactiveOAuth2AuthorizedClientProvider#setClockSkew(...)`
+
+The method `setClientCredentialsTokenResponseClient(...)` can be replaced with the constructor `ServerOAuth2AuthorizedClientExchangeFilterFunction(ReactiveOAuth2AuthorizedClientManager)`.
+
+[NOTE]
+====
+See xref:reactive/oauth2/client/authorization-grants.adoc#oauth2Client-client-creds-grant[Client Credentials] for more information.
+====
+
+=== `WebSessionOAuth2ServerAuthorizationRequestRepository`
+
+The method `setAllowMultipleAuthorizationRequests(...)` has no direct replacement.
+
+=== `UnAuthenticatedServerOAuth2AuthorizedClientRepository`
+
+The class `UnAuthenticatedServerOAuth2AuthorizedClientRepository` has no direct replacement. Usage of the class can be replaced with `AuthorizedClientServiceReactiveOAuth2AuthorizedClientManager`.
+
+== Add `@Configuration` to `@Enable*` annotations
+
+In 6.0, all Spring Security's `@Enable*` annotations had their `@Configuration` removed.
+While convenient, it was not consistent with the rest of the Spring projects and most notably Spring Framework's `@Enable*` annotations.
+Additionally, the introduction of support for `@Configuration(proxyBeanMethods=false)` in Spring Framework provides another reason to remove `@Configuration` meta-annotation from Spring Security's `@Enable*` annotations and allow users to opt into their preferred configuration mode.
+
+The following annotations had their `@Configuration` removed:
+
+- `@EnableGlobalAuthentication`
+- `@EnableGlobalMethodSecurity`
+- `@EnableMethodSecurity`
+- `@EnableReactiveMethodSecurity`
+- `@EnableWebSecurity`
+- `@EnableWebFluxSecurity`
+
+For example, if you are using `@EnableWebFluxSecurity`, you will need to change:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@EnableWebFluxSecurity
+public class SecurityConfig {
+	// ...
+}
+----
+====
+
+to:
+
+====
+.Java
+[source,java,role="primary"]
+----
+@Configuration
+@EnableWebFluxSecurity
+public class SecurityConfig {
+	// ...
+}
+----
+====
+
+And the same applies to every other annotation listed above.

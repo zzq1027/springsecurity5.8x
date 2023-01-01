@@ -1,0 +1,98 @@
+plugins {
+	id 'org.antora' version '1.0.0-alpha.3'
+}
+
+apply plugin: 'io.spring.convention.docs'
+apply plugin: 'java'
+
+antora {
+	version = '3.2.0-alpha.2'
+	playbook = file('local-antora-playbook.yml')
+	options = ['--clean', '--stacktrace']
+	environment = [
+		'ALGOLIA_API_KEY': '82c7ead946afbac3cf98c32446154691',
+		'ALGOLIA_APP_ID': '244V8V9FGG',
+		'ALGOLIA_INDEX_NAME': 'security-docs'
+	]
+	dependencies = [
+		'@antora/collector-extension': '1.0.0-alpha.3'
+	]
+}
+
+tasks.register('generateAntora') {
+	group = 'Documentation'
+	description = 'Generates the antora.yml for dynamic properties'
+	doLast {
+		def docsTag = snapshotBuild ? 'current' : project.version
+		def ghTag = snapshotBuild ? 'main' : project.version
+		def ghUrl = "https://github.com/spring-projects/spring-security/tree/$ghTag"
+		def ghOldSamplesUrl = 'https://github.com/spring-projects/spring-security/tree/5.4.x/samples'
+		def ghSamplesUrl = "https://github.com/spring-projects/spring-security-samples/tree/$samplesBranch"
+		def securityDocsUrl = "https://docs.spring.io/spring-security/site/docs/$docsTag"
+		def securityApiUrl = "$securityDocsUrl/api/"
+		def securityReferenceUrl = "$securityDocsUrl/reference/html5/"
+		def springFrameworkApiUrl = "https://docs.spring.io/spring-framework/docs/$springFrameworkVersion/javadoc-api/"
+		def springFrameworkReferenceUrl = "https://docs.spring.io/spring-framework/docs/$springFrameworkVersion/reference/html/"
+		def ymlVersions = resolvedVersions(project.configurations.testRuntimeClasspath).call()
+			.collect(v -> "    ${v.getKey()}: ${v.getValue()}")
+			.join('\n')
+		def outputFile = layout.buildDirectory.file('generateAntora/antora.yml').get().asFile
+		mkdir(outputFile.getParentFile())
+		def mainVersion = project.version
+		def prerelease = null
+		def versionComponents = mainVersion.split(/(?=-)/)
+        if (versionComponents.length > 1) {
+          if (versionComponents[1] == '-SNAPSHOT') {
+            mainVersion = versionComponents[0]
+            prerelease = "'-SNAPSHOT'"
+          } else {
+            prerelease = 'true'
+          }
+        }
+		def antoraYmlText = file('antora.yml').text
+		layout.buildDirectory.file('.antora.yml').get().asFile.text = antoraYmlText
+		antoraYmlText = antoraYmlText.lines().collect { l ->
+			if (l.startsWith('version: ')) {
+				return prerelease == null ? "version: '${mainVersion}'" : "version: '${mainVersion}'\nprerelease: ${prerelease}"
+			}
+			if (l.startsWith('title: ')) return "title: ${project.parent.description}"
+			return l == 'ext:' || l.getAt(0) == ' ' ? null : l
+		}.findAll(Objects::nonNull).join('\n')
+		outputFile.text = """$antoraYmlText
+asciidoc:
+  attributes:
+    icondir: icons
+    gh-old-samples-url: $ghOldSamplesUrl
+    gh-samples-url: $ghSamplesUrl
+    gh-url: $ghUrl
+    security-api-url: $securityApiUrl
+    security-reference-url: $securityReferenceUrl
+    spring-framework-api-url: $springFrameworkApiUrl
+    spring-framework-reference-url: $springFrameworkReferenceUrl
+    spring-security-version: ${project.version}
+${ymlVersions}
+"""
+	}
+}
+
+dependencies {
+	testImplementation platform(project(':spring-security-dependencies'))
+	testImplementation 'com.unboundid:unboundid-ldapsdk'
+	testImplementation 'org.apache.directory.server:apacheds-core'
+	testImplementation 'org.springframework:spring-core'
+}
+
+def resolvedVersions(Configuration configuration) {
+	return {
+		configuration.resolvedConfiguration
+				.resolvedArtifacts
+				.collectEntries { [(it.name + '-version'): it.moduleVersion.id.version] }
+	}
+}
+
+repositories {
+	mavenCentral()
+	maven { url 'https://repo.spring.io/release' }
+	maven { url 'https://repo.spring.io/milestone' }
+	maven { url 'https://repo.spring.io/snapshot' }
+}
